@@ -5,11 +5,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd.function import InplaceFunction, Function
 
-QParams = namedtuple('QParams', ['range', 'zero_point', 'num_bits'])
+__all__ = ['QConv2d']
+
+QParams = namedtuple('QParams', ['range', 'zero_point', 'num_bits']) # 由三个部分组成的表示
 
 _DEFAULT_FLATTEN = (1, -1)
 _DEFAULT_FLATTEN_GRAD = (0, -1)
-
 
 def _deflatten_as(x, x_full):
     shape = list(x.shape) + [1] * (x_full.dim() - x.dim())
@@ -20,14 +21,14 @@ def calculate_qparams(x, num_bits, flatten_dims=_DEFAULT_FLATTEN, reduce_dim=0, 
                       true_zero=False):
     with torch.no_grad():
         x_flat = x.flatten(*flatten_dims)
-        if x_flat.dim() == 1:
+        if x_flat.dim() == 1: # 如果变成一个一维的数据结果，将数据摊开的维度数目
             min_values = _deflatten_as(x_flat.min(), x)
             max_values = _deflatten_as(x_flat.max(), x)
         else:
             min_values = _deflatten_as(x_flat.min(-1)[0], x)
             max_values = _deflatten_as(x_flat.max(-1)[0], x)
 
-        if reduce_dim is not None:
+        if reduce_dim is not None: # 如果reduce_dim 不是None，那么进行相应的处理（缩减相应的维度），但是keepdim 
             if reduce_type == 'mean':
                 min_values = min_values.mean(reduce_dim, keepdim=keepdim)
                 max_values = max_values.mean(reduce_dim, keepdim=keepdim)
@@ -35,11 +36,12 @@ def calculate_qparams(x, num_bits, flatten_dims=_DEFAULT_FLATTEN, reduce_dim=0, 
                 min_values = min_values.min(reduce_dim, keepdim=keepdim)[0]
                 max_values = max_values.max(reduce_dim, keepdim=keepdim)[0]
 
-        range_values = max_values - min_values
+        range_values = max_values - min_values # 得到最大最小值之间的范围结果，之后注册一个QParams的类
         return QParams(range=range_values, zero_point=min_values,
                        num_bits=num_bits)
 
 
+# 这个类定义了一个均匀量化的基本处理，包括了前向和反向的过程
 class UniformQuantize(InplaceFunction):
 
     @staticmethod
@@ -57,16 +59,17 @@ class UniformQuantize(InplaceFunction):
         if qparams is None:
             assert num_bits is not None, "either provide qparams of num_bits to quantize"
             qparams = calculate_qparams(
-                input, num_bits=num_bits, flatten_dims=flatten_dims, reduce_dim=reduce_dim)
+                input, num_bits=num_bits, flatten_dims=flatten_dims, reduce_dim=reduce_dim) 
+            # 如果没有直接给出qparams，那么就通过计算来得到相应的结果
 
         zero_point = qparams.zero_point
         num_bits = qparams.num_bits
-        qmin = -(2. ** (num_bits - 1)) if signed else 0.
+        qmin = -(2. ** (num_bits - 1)) if signed else 0. # 是进行有符号还是无符号的量化
         qmax = qmin + 2. ** num_bits - 1.
-        scale = qparams.range / (qmax - qmin)
+        scale = qparams.range / (qmax - qmin) # 那么可以得到相应的scale，也就是直接通过range来得到
 
-        min_scale = torch.tensor(1e-8).expand_as(scale).cuda()
-        scale = torch.max(scale, min_scale)
+        min_scale = torch.tensor(1e-8).expand_as(scale).cuda() # 最小的scale 
+        scale = torch.max(scale, min_scale) # 然后设置一个scale 的 比较
 
         with torch.no_grad():
             output.add_(qmin * scale - zero_point).div_(scale)
@@ -84,7 +87,7 @@ class UniformQuantize(InplaceFunction):
     @staticmethod
     def backward(ctx, grad_output):
         # straight-through estimator
-        grad_input = grad_output
+        grad_input = grad_output # STE 方法， 量化部分不改变实际的权重的梯度
         return grad_input, None, None, None, None, None, None, None, None
 
 
@@ -138,8 +141,9 @@ def linear_biprec(input, weight, bias=None, num_bits_grad=None):
 
 def quantize(x, num_bits=None, qparams=None, flatten_dims=_DEFAULT_FLATTEN, reduce_dim=0, dequantize=True, signed=False,
              stochastic=False, inplace=False):
-    if qparams:
-        if qparams.num_bits:
+    # 这里有两种量化方式，一种是通过qparams 来进行控制，而另一种是通过num_bits 来进行控制
+    if qparams: # 当有相应的范围参数的时候
+        if qparams.num_bits: # 如果设置了相应的num_bits
             return UniformQuantize().apply(x, num_bits, qparams, flatten_dims, reduce_dim, dequantize, signed,
                                            stochastic, inplace)
     elif num_bits:

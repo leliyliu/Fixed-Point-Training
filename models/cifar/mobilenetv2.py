@@ -8,6 +8,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+__all__ = ['cifar10_mobilenet_v2', 'cifar100_mobilenet_v2']
+
 class Block(nn.Module):
     '''expand + depthwise + pointwise'''
     def __init__(self, in_planes, out_planes, expansion, stride):
