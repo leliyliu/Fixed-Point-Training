@@ -27,6 +27,8 @@ Reference:
 If you use this implementation in you work, please don't forget to mention the
 author, Yerlan Idelbayev.
 '''
+from models.modules.qconv import FPConv2d, qconv2d
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -55,11 +57,11 @@ class LambdaLayer(nn.Module):
 class BasicBlock(nn.Module):
     expansion = 1
 
-    def __init__(self, in_planes, planes, stride=1, option='A'):
+    def __init__(self, in_planes, planes, stride=1, option='A', QConv2d=FPConv2d):
         super(BasicBlock, self).__init__()
-        self.conv1 = nn.Conv2d(in_planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
+        self.conv1 = QConv2d(in_planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(planes)
-        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=1, padding=1, bias=False)
+        self.conv2 = QConv2d(planes, planes, kernel_size=3, stride=1, padding=1, bias=False)
         self.bn2 = nn.BatchNorm2d(planes)
 
         self.shortcut = nn.Sequential()
@@ -72,12 +74,12 @@ class BasicBlock(nn.Module):
                                             F.pad(x[:, :, ::2, ::2], (0, 0, 0, 0, planes//4, planes//4), "constant", 0))
             elif option == 'B':
                 self.shortcut = nn.Sequential(
-                     nn.Conv2d(in_planes, self.expansion * planes, kernel_size=1, stride=stride, bias=False),
+                     QConv2d(in_planes, self.expansion * planes, kernel_size=1, stride=stride, bias=False),
                      nn.BatchNorm2d(self.expansion * planes)
                 )
 
-    def forward(self, x):
-        out = F.relu(self.bn1(self.conv1(x)))
+    def forward(self, x, actbits, wbits, gbits):
+        out = F.relu(self.bn1(self.conv1(x, actbits, wbits, gbits)))
         out = self.bn2(self.conv2(out))
         out += self.shortcut(x)
         out = F.relu(out)
@@ -85,11 +87,12 @@ class BasicBlock(nn.Module):
 
 
 class ResNet(nn.Module):
-    def __init__(self, block, num_blocks, num_classes=10):
+    def __init__(self, block, num_blocks, num_classes=10, qconv_type='fp'):
         super(ResNet, self).__init__()
         self.in_planes = 16
 
-        self.conv1 = nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1, bias=False)
+        self.QConv2d = qconv2d(qconv_type)
+        self.conv1 = self.QConv2d(3, 16, kernel_size=3, stride=1, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(16)
         self.layer1 = self._make_layer(block, 16, num_blocks[0], stride=1)
         self.layer2 = self._make_layer(block, 32, num_blocks[1], stride=2)
@@ -102,13 +105,13 @@ class ResNet(nn.Module):
         strides = [stride] + [1]*(num_blocks-1)
         layers = []
         for stride in strides:
-            layers.append(block(self.in_planes, planes, stride))
+            layers.append(block(self.in_planes, planes, stride, QConv2d=self.QConv2d))
             self.in_planes = planes * block.expansion
 
         return nn.Sequential(*layers)
 
-    def forward(self, x):
-        out = F.relu(self.bn1(self.conv1(x)))
+    def forward(self, x, actbits, wbits, gbits):
+        out = F.relu(self.bn1(self.conv1(x, actbits, wbits, gbits)))
         out = self.layer1(out)
         out = self.layer2(out)
         out = self.layer3(out)
@@ -118,48 +121,48 @@ class ResNet(nn.Module):
         return out
 
 
-def cifar10_resnet20():
-    return ResNet(BasicBlock, [3, 3, 3])
+def cifar10_resnet20(qconv_type='fp'):
+    return ResNet(BasicBlock, [3, 3, 3], qconv_type=qconv_type)
 
 
-def cifar10_resnet32():
-    return ResNet(BasicBlock, [5, 5, 5])
+def cifar10_resnet32(qconv_type='fp'):
+    return ResNet(BasicBlock, [5, 5, 5], qconv_type=qconv_type)
 
 
-def cifar10_resnet38():
-    return ResNet(BasicBlock, [6, 6, 6])
+def cifar10_resnet38(qconv_type='fp'):
+    return ResNet(BasicBlock, [6, 6, 6], qconv_type=qconv_type)
 
 
-def cifar10_resnet44():
-    return ResNet(BasicBlock, [7, 7, 7])
+def cifar10_resnet44(qconv_type='fp'):
+    return ResNet(BasicBlock, [7, 7, 7], qconv_type=qconv_type)
 
 
-def cifar10_resnet56():
-    return ResNet(BasicBlock, [9, 9, 9])
+def cifar10_resnet56(qconv_type='fp'):
+    return ResNet(BasicBlock, [9, 9, 9], qconv_type=qconv_type)
 
 
-def cifar10_resnet74():
-    return ResNet(BasicBlock, [12, 12, 12])
+def cifar10_resnet74(qconv_type='fp'):
+    return ResNet(BasicBlock, [12, 12, 12], qconv_type=qconv_type)
 
 
-def cifar10_resnet110():
-    return ResNet(BasicBlock, [18, 18, 18])
+def cifar10_resnet110(qconv_type='fp'):
+    return ResNet(BasicBlock, [18, 18, 18], qconv_type=qconv_type)
 
 
-def cifar10_resnet1202():
-    return ResNet(BasicBlock, [200, 200, 200])
+def cifar10_resnet1202(qconv_type='fp'):
+    return ResNet(BasicBlock, [200, 200, 200], qconv_type=qconv_type)
 
-def cifar100_resnet20():
-    return ResNet(BasicBlock, [3, 3, 3], num_classes=100)
+def cifar100_resnet20(qconv_type='fp'):
+    return ResNet(BasicBlock, [3, 3, 3], num_classes=100, qconv_type=qconv_type)
 
-def cifar100_resnet32():
-    return ResNet(BasicBlock, [5, 5, 5], num_classes=100)
+def cifar100_resnet32(qconv_type='fp'):
+    return ResNet(BasicBlock, [5, 5, 5], num_classes=100, qconv_type=qconv_type)
 
-def cifar100_resnet38():
-    return ResNet(BasicBlock, [6, 6, 6], num_classes=100)
+def cifar100_resnet38(qconv_type='fp'):
+    return ResNet(BasicBlock, [6, 6, 6], num_classes=100, qconv_type=qconv_type)
 
-def cifar100_resnet74():
-    return ResNet(BasicBlock, [12, 12, 12], num_classes=100)
+def cifar100_resnet74(qconv_type='fp'):
+    return ResNet(BasicBlock, [12, 12, 12], num_classes=100, qconv_type=qconv_type)
 
 
 def test(net):
@@ -174,7 +177,7 @@ def test(net):
 
 if __name__ == "__main__":
     for net_name in __all__:
-        if net_name.startswith('resnet'):
+        if net_name.startswith('cifar'):
             print(net_name)
             test(globals()[net_name]())
             print()

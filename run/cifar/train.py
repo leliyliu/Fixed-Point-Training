@@ -19,13 +19,18 @@ import models.cifar as models
 from utils.utils import ProgressMeter, AverageMeter, save_checkpoint, accuracy
 from utils.ptflops import get_model_complexity_info
 from utils.dataset import prepare_test_data, prepare_train_data
+from models.modules.qconv import qconv_type
 
+
+conv_types = ['fp', 'cpt']
 
 def parse_args():
     parser = argparse.ArgumentParser(description='PyTorch CIFAR10/100 QuanTraining')
     parser.add_argument('-a', '--arch', metavar='ARCH', default='cifar10_resnet20',
                         help='model architecture (default: resnet18)')
     parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
+    parser.add_argument('--lr_schedule', default='piecewise', type=str,
+                        help='learning rate schedule')
     parser.add_argument('--resume', '-r', action='store_true',
                         help='resume from checkpoint')
     parser.add_argument('--evaluate', default=False, action='store_true', 
@@ -40,13 +45,17 @@ def parse_args():
     parser.add_argument('-p', '--print-freq', default=50, type=int,
                         metavar='N', help='print frequency (default: 10)')
     parser.add_argument('-b', '--batch-size', default=256, type=int, help='batch size')
-    parser.add_argument('--epochs', default=200, type=int, help='epochs')
+    parser.add_argument('--epochs', default=100, type=int, help='epochs')
     parser.add_argument('-d', '--dataset', type=str, default='cifar10', choices=['cifar10', 'cifar100'])
     parser.add_argument('-j', '--workers', default=4, type=int, help='number of data loading workers')
-    parser.add_argument('--lr_schedule', default='piecewise', type=str,
-                            help='learning rate schedule')
     parser.add_argument('--epochs', default=100, type=int, help='training epochs')
+
+    parser.add_argument('--actbits', default=0, type=int, help='bit-width for activations')
+    parser.add_argument('--wbits', default=0, type=int, help='bit-width for weights')
+    parser.add_argument('--gbits', default=0, type=0, help='bit-width for gradients')
     
+    parser.add_argument('--conv_type', default='fp', type=str, help='the type of convolutions')
+
     args = parser.parse_args()
     return args
 
@@ -59,7 +68,7 @@ def main():
         np.random.seed(args.manual_seed)
         random.seed(args.manual_seed)  # 设置随机种子
 
-    args.save = '{}-train-{}-{}-{}'.format(args.dataset, args.arch, args.save, time.strftime("%Y%m%d-%H%M%S"))
+    args.save = 'train-{}-{}-{}'.format(args.arch, args.save, time.strftime("%Y%m%d-%H%M%S"))
 
     from tensorboardX import SummaryWriter
     writer_comment = args.save 
@@ -86,7 +95,7 @@ def main():
 
     logging.info('==> Building model..')
 
-    model = models.__dict__[args.arch]()
+    model = models.__dict__[args.arch](args.conv_type)
 
     model = model.to(device)
 
@@ -164,7 +173,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
         target = target.cuda(args.gpu, non_blocking=True)
 
         # compute output
-        output = model(images)
+        output = model(images, args.actbits, args.wbits, args.gbits)
         loss = criterion(output, target)
 
         # measure accuracy and record loss
@@ -204,7 +213,7 @@ def validate(val_loader, model, criterion, args):
             target = target.cuda(args.gpu, non_blocking=True)
 
             # compute output
-            output = model(images)
+            output = model(images, args.actbits, args.wbits, args.gbits)
             loss = criterion(output, target)
 
             # measure accuracy and record loss

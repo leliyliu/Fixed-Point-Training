@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd.function import InplaceFunction, Function
 
-__all__ = ['QConv2d']
+__all__ = ['CPTConv2d']
 
 QParams = namedtuple('QParams', ['range', 'zero_point', 'num_bits']) # 由三个部分组成的表示
 
@@ -210,12 +210,12 @@ class QuantMeasure(nn.Module):
             return q_input
 
 
-class QConv2d(nn.Conv2d):
+class CPTConv2d(nn.Conv2d):
     """docstring for QConv2d."""
 
     def __init__(self, in_channels, out_channels, kernel_size,
                  stride=1, padding=0, dilation=1, groups=1, bias=True):
-        super(QConv2d, self).__init__(in_channels, out_channels, kernel_size,
+        super(CPTConv2d, self).__init__(in_channels, out_channels, kernel_size,
                                       stride, padding, dilation, groups, bias)
 
         self.quantize_input = QuantMeasure(shape_measure=(1, 1, 1, 1), flatten_dims=(1, -1))
