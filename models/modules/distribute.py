@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd.function import InplaceFunction, Function
 
-__all__ = ['CPTConv2d']
+__all__ = ['DistConv2d']
 
 QParams = namedtuple('QParams', ['range', 'zero_point', 'num_bits']) # 由三个部分组成的表示
 
@@ -15,6 +15,12 @@ _DEFAULT_FLATTEN_GRAD = (0, -1)
 def _deflatten_as(x, x_full):
     shape = list(x.shape) + [1] * (x_full.dim() - x.dim())
     return x.view(*shape)
+
+
+def calculate(x, num_bits, flatten_dims=_DEFAULT_FLATTEN, reduce_dim=0, reduce_type='mean', keepdim=False, 
+                    true_zero=False):
+    with torch.no_grad():
+        pass 
 
 
 def calculate_qparams(x, num_bits, flatten_dims=_DEFAULT_FLATTEN, reduce_dim=0, reduce_type='mean', keepdim=False,
@@ -95,7 +101,7 @@ class UniformQuantizeGrad(InplaceFunction):
 
     @staticmethod
     def forward(ctx, input, num_bits=None, qparams=None, flatten_dims=_DEFAULT_FLATTEN_GRAD,
-                reduce_dim=0, dequantize=True, signed=False, stochastic=True):
+                reduce_dim=0, dequantize=True, signed=False, stochastic=True, lastrange=None):
         ctx.num_bits = num_bits
         ctx.qparams = qparams
         ctx.flatten_dims = flatten_dims
@@ -104,11 +110,13 @@ class UniformQuantizeGrad(InplaceFunction):
         ctx.dequantize = dequantize
         ctx.reduce_dim = reduce_dim
         ctx.inplace = False
+        ctx.lastrange = lastrange
         return input
 
     @staticmethod
     def backward(ctx, grad_output):
         qparams = ctx.qparams
+        lastrange = ctx.lastrange 
         with torch.no_grad():
             if qparams is None:
                 assert ctx.num_bits is not None, "either provide qparams of num_bits to quantize"
@@ -120,24 +128,6 @@ class UniformQuantizeGrad(InplaceFunction):
                                   qparams=qparams, flatten_dims=ctx.flatten_dims, reduce_dim=ctx.reduce_dim,
                                   dequantize=True, signed=ctx.signed, stochastic=ctx.stochastic, inplace=False)
         return grad_input, None, None, None, None, None, None, None
-
-
-def conv2d_biprec(input, weight, bias=None, stride=1, padding=0, dilation=1, groups=1, num_bits_grad=None):
-    out1 = F.conv2d(input.detach(), weight, bias,
-                    stride, padding, dilation, groups)
-    out2 = F.conv2d(input, weight.detach(), bias.detach() if bias is not None else None,
-                    stride, padding, dilation, groups)
-    out2 = quantize_grad(out2, num_bits=num_bits_grad, flatten_dims=(1, -1))
-    return out1 + out2 - out1.detach()
-
-
-def linear_biprec(input, weight, bias=None, num_bits_grad=None):
-    out1 = F.linear(input.detach(), weight, bias)
-    out2 = F.linear(input, weight.detach(), bias.detach()
-    if bias is not None else None)
-    out2 = quantize_grad(out2, num_bits=num_bits_grad)
-    return out1 + out2 - out1.detach()
-
 
 def quantize(x, num_bits=None, qparams=None, flatten_dims=_DEFAULT_FLATTEN, reduce_dim=0, dequantize=True, signed=False,
              stochastic=False, inplace=False):
@@ -154,14 +144,14 @@ def quantize(x, num_bits=None, qparams=None, flatten_dims=_DEFAULT_FLATTEN, redu
 
 
 def quantize_grad(x, num_bits=None, qparams=None, flatten_dims=_DEFAULT_FLATTEN_GRAD, reduce_dim=0, dequantize=True,
-                  signed=False, stochastic=True):
+                  signed=False, stochastic=True, lastrange=None):
     if qparams:
         if qparams.num_bits:
             return UniformQuantizeGrad().apply(x, num_bits, qparams, flatten_dims, reduce_dim, dequantize, signed,
-                                               stochastic)
+                                               stochastic, lastrange)
     elif num_bits:
         return UniformQuantizeGrad().apply(x, num_bits, qparams, flatten_dims, reduce_dim, dequantize, signed,
-                                           stochastic)
+                                           stochastic, lastrange)
 
     return x
 
@@ -210,16 +200,15 @@ class QuantMeasure(nn.Module):
             return q_input
 
 
-class CPTConv2d(nn.Conv2d):
+class DistConv2d(nn.Conv2d):
     """docstring for QConv2d."""
 
     def __init__(self, in_channels, out_channels, kernel_size,
                  stride=1, padding=0, dilation=1, groups=1, bias=True):
-        super(CPTConv2d, self).__init__(in_channels, out_channels, kernel_size,
+        super(DistConv2d, self).__init__(in_channels, out_channels, kernel_size,
                                       stride, padding, dilation, groups, bias)
 
         self.quantize_input = QuantMeasure(shape_measure=(1, 1, 1, 1), flatten_dims=(1, -1))
-        self.stride = stride
 
     def forward(self, input, actbits, wbits, gbits):
         if actbits == 0 and wbits==0:
@@ -242,20 +231,8 @@ class CPTConv2d(nn.Conv2d):
         output = quantize_grad(output, num_bits=gbits, flatten_dims=(1, -1))
 
         return output
+
         
-
-    def conv2d_quant_act(self, input_fw, input_bw, weight, bias=None, stride=1, padding=0, dilation=1, groups=1,
-                         error_bits=0, gc_bits=0):
-        out1 = F.conv2d(input_fw, weight.detach(), bias.detach() if bias is not None else None,
-                        stride, padding, dilation, groups)
-        out2 = F.conv2d(input_bw.detach(), weight, bias,
-                        stride, padding, dilation, groups)
-        out1 = quantize_grad(out1, num_bits=error_bits)
-        out2 = quantize_grad(out2, num_bits=gc_bits)
-        return out1 + out2 - out2.detach()
-
-
-
 if __name__ == '__main__':
     x = torch.rand(2, 3)
     x_q = quantize(x, flatten_dims=(-1), num_bits=8, dequantize=True)

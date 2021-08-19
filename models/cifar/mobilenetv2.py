@@ -28,16 +28,14 @@ class Block(nn.Module):
 
         self.shortcut = nn.Sequential()
         if stride == 1 and in_planes != out_planes:
-            self.shortcut = nn.Sequential(
-                nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=1, padding=0, bias=False),
-                nn.BatchNorm2d(out_planes),
-            )
+            self.shortcut = QConv2d(in_planes, out_planes, kernel_size=1, stride=1, padding=0, bias=False)
+            self.bn4 = nn.BatchNorm2d(out_planes)
 
     def forward(self, x, actbits, wbits, gbits):
         out = F.relu(self.bn1(self.conv1(x, actbits, wbits, gbits)))
         out = F.relu(self.bn2(self.conv2(out, actbits, wbits, gbits)))
         out = self.bn3(self.conv3(out, actbits, wbits, gbits))
-        out = out + self.shortcut(x) if self.stride==1 else out
+        out = out + self.bn4(self.shortcut(x, actbits, wbits, gbits)) if self.stride==1 else out
         return out
 
 

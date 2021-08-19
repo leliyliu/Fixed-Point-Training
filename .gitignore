@@ -130,3 +130,6 @@ dmypy.json
 
 # pycache file 
 .pyc 
+
+# experiments
+*-EXP-*

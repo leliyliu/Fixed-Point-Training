@@ -5,6 +5,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd.function import InplaceFunction, Function
 
+from sklearn.metrics.pairwise import cosine_similarity
+from scipy.spatial.distance import cosine
+import scipy.optimize as opt
+
 __all__ = ['CPTConv2d']
 
 QParams = namedtuple('QParams', ['range', 'zero_point', 'num_bits']) # 由三个部分组成的表示
@@ -16,6 +20,35 @@ def _deflatten_as(x, x_full):
     shape = list(x.shape) + [1] * (x_full.dim() - x.dim())
     return x.view(*shape)
 
+def mse(x, alpha, sign, xmax):  
+    alpha = torch.from_numpy(alpha).to(x.device)
+    if sign:
+        x_clip = (x / alpha).clamp(0, xmax)
+    else:
+        x_clip = (x / alpha).clamp(-xmax, xmax)
+    x_q = x_clip.round()
+    x_q = x_q * alpha
+    return (((x_q - x) ** 2).sum() / x.numel()).cpu().item()
+
+def get_alpha(x, sign, xmax):
+    # method1
+    # print('the x shape is : ' , x.shape)
+    alpha = x.view(x.shape[0], -1).max(axis=1)[0].topk(10)[0][-1] / xmax
+
+    mmse = lambda param: mse(x, param, sign=sign, xmax=xmax)
+    res = opt.minimize(mmse, (alpha.detach().cpu().numpy()), method='powell',
+                       options={'disp': False, 'ftol': 0.05, 'maxiter': 100, 'maxfev': 100})
+    return torch.from_numpy(res.x).abs()
+
+
+def calculate(x, num_bits, flatten_dims=_DEFAULT_FLATTEN, reduce_dim=0, reduce_type='mean', keepdim=False,
+                      true_zero=False):
+    with torch.no_grad():
+        x_flat = x.flatten(*flatten_dims)
+
+        # range_values = max_values - min_values # 得到最大最小值之间的范围结果，之后注册一个QParams的类
+        # return QParams(range=range_values, zero_point=min_values,
+        #                num_bits=num_bits)
 
 def calculate_qparams(x, num_bits, flatten_dims=_DEFAULT_FLATTEN, reduce_dim=0, reduce_type='mean', keepdim=False,
                       true_zero=False):
@@ -121,24 +154,6 @@ class UniformQuantizeGrad(InplaceFunction):
                                   dequantize=True, signed=ctx.signed, stochastic=ctx.stochastic, inplace=False)
         return grad_input, None, None, None, None, None, None, None
 
-
-def conv2d_biprec(input, weight, bias=None, stride=1, padding=0, dilation=1, groups=1, num_bits_grad=None):
-    out1 = F.conv2d(input.detach(), weight, bias,
-                    stride, padding, dilation, groups)
-    out2 = F.conv2d(input, weight.detach(), bias.detach() if bias is not None else None,
-                    stride, padding, dilation, groups)
-    out2 = quantize_grad(out2, num_bits=num_bits_grad, flatten_dims=(1, -1))
-    return out1 + out2 - out1.detach()
-
-
-def linear_biprec(input, weight, bias=None, num_bits_grad=None):
-    out1 = F.linear(input.detach(), weight, bias)
-    out2 = F.linear(input, weight.detach(), bias.detach()
-    if bias is not None else None)
-    out2 = quantize_grad(out2, num_bits=num_bits_grad)
-    return out1 + out2 - out1.detach()
-
-
 def quantize(x, num_bits=None, qparams=None, flatten_dims=_DEFAULT_FLATTEN, reduce_dim=0, dequantize=True, signed=False,
              stochastic=False, inplace=False):
     # 这里有两种量化方式，一种是通过qparams 来进行控制，而另一种是通过num_bits 来进行控制
@@ -228,7 +243,7 @@ class CPTConv2d(nn.Conv2d):
 
         if self.bias is not None:
             qbias = quantize(
-                self.bias, num_bits=wbits,
+                self.bias, num_bits=self.num_bits,
                 flatten_dims=(0, -1))
         else:
             qbias = None
@@ -242,22 +257,13 @@ class CPTConv2d(nn.Conv2d):
         output = quantize_grad(output, num_bits=gbits, flatten_dims=(1, -1))
 
         return output
-        
 
-    def conv2d_quant_act(self, input_fw, input_bw, weight, bias=None, stride=1, padding=0, dilation=1, groups=1,
-                         error_bits=0, gc_bits=0):
-        out1 = F.conv2d(input_fw, weight.detach(), bias.detach() if bias is not None else None,
-                        stride, padding, dilation, groups)
-        out2 = F.conv2d(input_bw.detach(), weight, bias,
-                        stride, padding, dilation, groups)
-        out1 = quantize_grad(out1, num_bits=error_bits)
-        out2 = quantize_grad(out2, num_bits=gc_bits)
-        return out1 + out2 - out2.detach()
-
-
+# if __name__ == '__main__':
+#     x = torch.rand(2, 3)
+#     x_q = quantize(x, flatten_dims=(-1), num_bits=8, dequantize=True)
+#     print(x)
+#     print(x_q)
 
 if __name__ == '__main__':
-    x = torch.rand(2, 3)
-    x_q = quantize(x, flatten_dims=(-1), num_bits=8, dequantize=True)
-    print(x)
-    print(x_q)
+    x = torch.randn(32, 3, 16, 16)
+    calculate(x, num_bits=8, flatten_dims=_DEFAULT_FLATTEN_GRAD)

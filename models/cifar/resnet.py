@@ -36,7 +36,7 @@ import torch.nn.init as init
 
 from torch.autograd import Variable
 
-__all__ = ['cifar10_resnet20', 'cifar10_resnet32', 'cifar10_resnet38', 'cifar10_resnet44', 'cifar10_resnet56', 'cifar10_resnet74'
+__all__ = ['cifar10_resnet20', 'cifar10_resnet32', 'cifar10_resnet38', 'cifar10_resnet44', 'cifar10_resnet56', 'cifar10_resnet74',
             'cifar10_resnet110', 'cifar10_resnet1202', 'cifar100_resnet20', 'cifar100_resnet32', 'cifar100_resnet38', 'cifar100_resnet74']
 
 def _weights_init(m):
@@ -80,7 +80,7 @@ class BasicBlock(nn.Module):
 
     def forward(self, x, actbits, wbits, gbits):
         out = F.relu(self.bn1(self.conv1(x, actbits, wbits, gbits)))
-        out = self.bn2(self.conv2(out))
+        out = self.bn2(self.conv2(out, actbits, wbits, gbits))
         out += self.shortcut(x)
         out = F.relu(out)
         return out
@@ -112,9 +112,15 @@ class ResNet(nn.Module):
 
     def forward(self, x, actbits, wbits, gbits):
         out = F.relu(self.bn1(self.conv1(x, actbits, wbits, gbits)))
-        out = self.layer1(out)
-        out = self.layer2(out)
-        out = self.layer3(out)
+        for block in self.layer1:
+            out = block(out, actbits, wbits, gbits)
+        for block in self.layer2:
+            out = block(out, actbits, wbits, gbits)
+        for block in self.layer3:
+            out = block(out, actbits, wbits, gbits)
+        # out = self.layer1(out, actbits, wbits, gbits)
+        # out = self.layer2(out, actbits, wbits, gbits)
+        # out = self.layer3(out, actbits, wbits, gbits)
         out = F.avg_pool2d(out, out.size()[3])
         out = out.view(out.size(0), -1)
         out = self.linear(out)

@@ -19,8 +19,6 @@ import models.cifar as models
 from utils.utils import ProgressMeter, AverageMeter, save_checkpoint, accuracy
 from utils.ptflops import get_model_complexity_info
 from utils.dataset import prepare_test_data, prepare_train_data
-from models.modules.qconv import qconv_type
-
 
 conv_types = ['fp', 'cpt']
 
@@ -45,16 +43,15 @@ def parse_args():
     parser.add_argument('-p', '--print-freq', default=50, type=int,
                         metavar='N', help='print frequency (default: 10)')
     parser.add_argument('-b', '--batch-size', default=256, type=int, help='batch size')
-    parser.add_argument('--epochs', default=100, type=int, help='epochs')
     parser.add_argument('-d', '--dataset', type=str, default='cifar10', choices=['cifar10', 'cifar100'])
     parser.add_argument('-j', '--workers', default=4, type=int, help='number of data loading workers')
     parser.add_argument('--epochs', default=100, type=int, help='training epochs')
 
     parser.add_argument('--actbits', default=0, type=int, help='bit-width for activations')
     parser.add_argument('--wbits', default=0, type=int, help='bit-width for weights')
-    parser.add_argument('--gbits', default=0, type=0, help='bit-width for gradients')
+    parser.add_argument('--gbits', default=0, type=int, help='bit-width for gradients')
     
-    parser.add_argument('--conv_type', default='fp', type=str, help='the type of convolutions')
+    parser.add_argument('--conv-type', default='fp', type=str, help='the type of convolutions')
 
     args = parser.parse_args()
     return args
@@ -84,6 +81,10 @@ def main():
         warnings.warn('You have chosen a specific GPU. This will completely '
                       'disable data parallelism.')
 
+    fh = logging.FileHandler(os.path.join('{}/log.txt'.format(log_dir)))
+    fh.setFormatter(logging.Formatter(log_format))
+    logging.getLogger().addHandler(fh)
+
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     best_acc = 0  # best test accuracy
     start_epoch = 0  # start from epoch 0 or last checkpoint epoch
@@ -106,7 +107,7 @@ def main():
     if args.resume: 
         logging.info('==> Resuming from checkpoint..')
         assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
-        checkpoint = torch.load('./checkpoint/{}-ckpt.pth'.format(args.arch))
+        checkpoint = torch.load('./checkpoint/{}-{}-ckpt.pth'.format(args.arch, args.conv_type))
         model.load_state_dict(checkpoint['model'])
         best_acc = checkpoint['acc']
         start_epoch = checkpoint['epoch']
@@ -115,7 +116,7 @@ def main():
     optimizer = optim.SGD(model.parameters(), lr=args.lr,
                         momentum=0.9, weight_decay=5e-4)
     
-    scheduler = torch.optim.lr_scheduler.ConsineAnnealingLR(optimizer, T_max=args.epochs)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs) 
 
 
     if args.evaluate:
@@ -148,7 +149,7 @@ def main():
             }
             if not os.path.isdir('checkpoint'):
                 os.mkdir('checkpoint')
-            torch.save(state, './checkpoint/{}-ckpt.pth'.format(args.arch))
+            torch.save(state, './checkpoint/{}-{}-ckpt.pth'.format(args.arch, args.conv_type))
         scheduler.step()
 
 
@@ -233,3 +234,6 @@ def validate(val_loader, model, criterion, args):
               .format(top1=top1))
 
     return losses.avg, top1.avg
+
+if __name__ == '__main__':
+    main()
